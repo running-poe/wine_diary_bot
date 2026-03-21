@@ -6,7 +6,7 @@ defmodule WineDiaryBot.Bot.Handler do
   alias WineDiaryBot.Accounts
   require Logger
 
-   defstruct offset: 0, limit: 100, timeout: 10, interval: 1000, allowed_updates: []
+   defstruct offset: 0, limit: 100, timeout: 60, interval: 1000, allowed_updates: []
 
   @org_steps [
     {:color, nil, :color_custom},
