@@ -22,10 +22,16 @@ defmodule WineDiaryBot.Media do
     end
   end
 
-  defp download_telegram_file(file_id) do
+    defp download_telegram_file(file_id) do
     Logger.debug("Requesting file path from Telegram API...")
+
+    # Получаем объект файла
     {:ok, file} = Telegex.get_file(file_id)
-    url = "https://api.telegram.org/file/bot#{Telegex.token()}/#{file.file_path}"
+
+    # ИСПРАВЛЕНО: Берем токен из конфига приложения
+    token = Application.get_env(:telegex, :token)
+
+    url = "https://api.telegram.org/file/bot#{token}/#{file.file_path}"
 
     temp_path = Path.join(System.tmp_dir!(), "telegram_#{file_id}.jpg")
 

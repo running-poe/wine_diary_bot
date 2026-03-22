@@ -28,7 +28,8 @@ defmodule WineDiaryBot.Bot.Handler do
   end
 
   @impl true
-  def on_update(update, _bot) do
+  #def on_update(update, _bot) do
+  def on_update(update) do
     cond do
       update.message ->
         handle_message(update.message)
@@ -162,6 +163,8 @@ defmodule WineDiaryBot.Bot.Handler do
 
   defp handle_callback(cq) do
     chat_id = cq.message.chat.id
+    # ИСПРАВЛЕНО: Получаем ID сообщения, чтобы потом его редактировать
+    message_id = cq.message.message_id
     data = cq.data
     Logger.debug("Callback: #{data} from #{chat_id}")
 
@@ -182,24 +185,27 @@ defmodule WineDiaryBot.Bot.Handler do
         ask_for_rating(chat_id)
 
       "rate:" <> val ->
-        handle_rating_callback(chat_id, val)
+        # Передаем message_id в функцию обработки оценки
+        handle_rating_callback(chat_id, message_id, val)
 
       _ -> :ok
     end
     Telegex.answer_callback_query(cq.id, "")
   end
 
-  defp handle_rating_callback(chat_id, val) do
+  # Добавлен аргумент message_id
+  defp handle_rating_callback(chat_id, message_id, val) do
     state = SessionManager.get_state(chat_id)
     Logger.info("Rating callback: #{val}")
 
     if state.step == :editing_rating do
       Tastings.update_tasting_field(state.data.editing_tasting_id, :rating, Decimal.new(val))
-      Telegex.edit_message_text(chat_id, nil, "Оценка обновлена.")
+      Telegex.edit_message_text(chat_id, message_id, "Оценка обновлена.")
       show_tasting_detail(chat_id, state.data.editing_tasting_id)
     else
       SessionManager.update_data(chat_id, %{rating: Decimal.new(val)})
-      Telegex.edit_message_text(chat_id, nil, "Оценка: #{val}.")
+      # ИСПРАВЛЕНО: Указываем message_id и пустой список опций []
+      Telegex.edit_message_text(chat_id, message_id, "Оценка: #{val}.", [])
       set_step(chat_id, :waiting_price)
       Telegex.send_message(chat_id, "Введите цену (руб) или /skip:")
     end

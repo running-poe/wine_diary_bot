@@ -31,7 +31,14 @@ RUN MIX_ENV=prod mix release
 # ==========================================
 FROM alpine:3.20.1
 
-RUN apk add --no-cache openssl ncurses imagemagick libstdc++ curl
+RUN apk add --no-cache \
+    openssl \
+    ncurses \
+    imagemagick \
+    libjpeg-turbo \
+    libpng \
+    libstdc++ \
+    curl
 
 WORKDIR /app
 
