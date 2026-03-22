@@ -6,8 +6,6 @@ defmodule WineDiaryBot.Bot.Handler do
   alias WineDiaryBot.Accounts
   require Logger
 
-   defstruct offset: 0, limit: 100, timeout: 60, interval: 1000, allowed_updates: []
-
   @org_steps [
     {:color, nil, :color_custom},
     {:color_intensity, "intensity", :color_intensity_custom},
@@ -18,19 +16,19 @@ defmodule WineDiaryBot.Bot.Handler do
     {:finish, "finish", :finish_custom}
   ]
 
+  # Структура состояния для Telegex 1.7.2
+  defstruct offset: 0, limit: 100, timeout: 10, allowed_updates: [], interval: 1000
+
   # --- GenHandler Callbacks ---
 
   @impl true
   def on_boot do
-    # Сообщаем, что бот запущен
-    Logger.info("Telegex polling Handler initialized")
-    # Возвращаем ok и начальное состояние
+    Logger.info("Telegex Polling Handler initialized successfully.")
     %__MODULE__{}
   end
 
   @impl true
-  # def on_update(update, _bot) do
-  def on_update(update) do
+  def on_update(update, _bot) do
     cond do
       update.message ->
         handle_message(update.message)
@@ -215,11 +213,13 @@ defmodule WineDiaryBot.Bot.Handler do
     SessionManager.set_state(chat_id, %{state | step: step})
   end
 
+  # ИСПРАВЛЕНО: Создание кнопок через struct syntax
   defp send_menu(chat_id) do
-    keyboard = Telegex.Type.InlineKeyboardMarkup.new([
-      [Telegex.Type.InlineKeyboardButton.new("➕ Добавить вино", callback_data: "action:add")],
-      [Telegex.Type.InlineKeyboardButton.new("📋 Мои дегустации", callback_data: "action:list")]
-    ])
+    btn1 = %Telegex.Type.InlineKeyboardButton{text: "➕ Добавить вино", callback_data: "action:add"}
+    btn2 = %Telegex.Type.InlineKeyboardButton{text: "📋 Мои дегустации", callback_data: "action:list"}
+
+    keyboard = %Telegex.Type.InlineKeyboardMarkup{inline_keyboard: [[btn1], [btn2]]}
+
     Telegex.send_message(chat_id, "Главное меню:", reply_markup: keyboard)
   end
 
@@ -232,10 +232,15 @@ defmodule WineDiaryBot.Bot.Handler do
     buttons = Enum.map(tastings, fn t ->
       name = t.wine.name
       rating = t.rating || "нет"
-      Telegex.Type.InlineKeyboardButton.new("#{name} (#{rating})", callback_data: "view:#{t.id}")
+      %Telegex.Type.InlineKeyboardButton{text: "#{name} (#{rating})", callback_data: "view:#{t.id}"}
     end)
 
-    keyboard = Telegex.Type.InlineKeyboardMarkup.new(buttons ++ [[Telegex.Type.InlineKeyboardButton.new("🏠 Меню", callback_data: "action:menu")]])
+    btn_menu = %Telegex.Type.InlineKeyboardButton{text: "🏠 Меню", callback_data: "action:menu"}
+
+    # Добавляем кнопку меню в конец списка
+    all_buttons = buttons ++ [[btn_menu]]
+
+    keyboard = %Telegex.Type.InlineKeyboardMarkup{inline_keyboard: all_buttons}
     Telegex.send_message(chat_id, text, reply_markup: keyboard)
   end
 
@@ -248,11 +253,11 @@ defmodule WineDiaryBot.Bot.Handler do
     ⭐ Оценка: #{tasting.rating || "нет"}
     """
 
-    keyboard = Telegex.Type.InlineKeyboardMarkup.new([
-      [Telegex.Type.InlineKeyboardButton.new("✏️ Изменить оценку", callback_data: "edit:rating:#{tasting_id}")],
-      [Telegex.Type.InlineKeyboardButton.new("📸 Изменить фото", callback_data: "edit:photo:#{tasting_id}")],
-      [Telegex.Type.InlineKeyboardButton.new("🔙 Назад", callback_data: "action:list")]
-    ])
+    btn1 = %Telegex.Type.InlineKeyboardButton{text: "✏️ Изменить оценку", callback_data: "edit:rating:#{tasting_id}"}
+    btn2 = %Telegex.Type.InlineKeyboardButton{text: "📸 Изменить фото", callback_data: "edit:photo:#{tasting_id}"}
+    btn3 = %Telegex.Type.InlineKeyboardButton{text: "🔙 Назад", callback_data: "action:list"}
+
+    keyboard = %Telegex.Type.InlineKeyboardMarkup{inline_keyboard: [[btn1], [btn2], [btn3]]}
 
     if tasting.photos && List.first(tasting.photos) do
       Telegex.send_photo(chat_id, List.first(tasting.photos).image_url, caption: text, parse_mode: "Markdown", reply_markup: keyboard)
@@ -263,10 +268,15 @@ defmodule WineDiaryBot.Bot.Handler do
 
   defp ask_for_rating(chat_id) do
     set_step(chat_id, :waiting_rating)
+
+    # Генерируем кнопки оценок
     buttons = for row <- [0..2, 3..5, 6..8, 9..10] do
-      Enum.map(row, fn v -> Telegex.Type.InlineKeyboardButton.new("#{v}", callback_data: "rate:#{v}.0") end)
+      Enum.map(row, fn v ->
+        %Telegex.Type.InlineKeyboardButton{text: "#{v}", callback_data: "rate:#{v}.0"}
+      end)
     end
-    keyboard = Telegex.Type.InlineKeyboardMarkup.new(buttons)
+
+    keyboard = %Telegex.Type.InlineKeyboardMarkup{inline_keyboard: buttons}
     Telegex.send_message(chat_id, "Поставьте оценку:", reply_markup: keyboard)
   end
 
