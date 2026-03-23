@@ -26,6 +26,7 @@ defmodule WineDiaryBot.MixProject do
 
       # Telegex (Фиксируем версию 1.7.2)
       {:telegex, "~> 1.7"},
+       {:multipart, "~> 0.4"},
 
       # Явные зависимости для совместимости
       {:plug, "~> 1.14"},

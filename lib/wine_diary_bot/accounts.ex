@@ -1,17 +1,22 @@
 defmodule WineDiaryBot.Accounts do
+  import Ecto.Query, warn: false
   alias WineDiaryBot.Repo
   alias WineDiaryBot.Accounts.User
-  require Logger
 
+  @doc """
+  Получает пользователя по telegram_id или создает нового.
+  Всегда возвращает {:ok, user} или {:error, changeset}.
+  """
   def get_or_create_user(telegram_id) do
     case Repo.get_by(User, telegram_id: telegram_id) do
       nil ->
-        Logger.info("Creating new user with telegram_id: #{telegram_id}")
+        # Пользователь не найден, создаем нового
         %User{telegram_id: telegram_id}
-        |> Repo.insert!()
+        |> Repo.insert()
+
       user ->
-        Logger.debug("Found existing user: #{user.id}")
-        user
+        # Пользователь найден, оборачиваем в {:ok, ...} для единообразия
+        {:ok, user}
     end
   end
 end

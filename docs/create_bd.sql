@@ -1,393 +1,498 @@
 -- ==========================================
--- 1. РАСШИРЕНИЯ И УТИЛИТЫ
+-- 0. ПОЛНАЯ ОЧИСТКА БАЗЫ ДАННЫХ
 -- ==========================================
 
--- Расширение для генерации UUID (если не включено в Supabase по умолчанию)
-create extension if not exists "uuid-ossp";
+-- Удаляем основные таблицы
+DROP TABLE IF EXISTS public.tasting_aroma_tags CASCADE;
+DROP TABLE IF EXISTS public.tasting_photos CASCADE;
+DROP TABLE IF EXISTS public.tasting_notes CASCADE;
+DROP TABLE IF EXISTS public.tastings CASCADE;
+DROP TABLE IF EXISTS public.wine_rating_stats CASCADE;
+DROP TABLE IF EXISTS public.user_wine_stats CASCADE;
+DROP TABLE IF EXISTS public.wine_grapes CASCADE;
+DROP TABLE IF EXISTS public.wine_prices CASCADE;
+DROP TABLE IF EXISTS public.wines CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+DROP TABLE IF EXISTS public.users CASCADE;
+
+-- Удаляем справочники
+DROP TABLE IF EXISTS public.ref_aromas CASCADE;
+DROP TABLE IF EXISTS public.ref_levels CASCADE;
+DROP TABLE IF EXISTS public.ref_colors CASCADE;
+DROP TABLE IF EXISTS public.ref_grapes CASCADE;
+DROP TABLE IF EXISTS public.ref_wine_types CASCADE;
+DROP TABLE IF EXISTS public.ref_producers CASCADE;
+DROP TABLE IF EXISTS public.ref_regions CASCADE;
+DROP TABLE IF EXISTS public.ref_countries CASCADE;
+
+-- Удаляем функции
+DROP FUNCTION IF EXISTS public.update_updated_at_column() CASCADE;
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.update_wine_rating_stats() CASCADE;
+
+-- ==========================================
+-- 1. УТИЛИТЫ
+-- ==========================================
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Функция автообновления updated_at
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$ BEGIN
+    NEW.updated_at = NOW(); -- NOW() возвращает timestamp, совместимый с Ecto
+    RETURN NEW;
+END;
+ $$ LANGUAGE plpgsql;
 
 -- ==========================================
 -- 2. СПРАВОЧНИКИ (DICTIONARIES)
 -- ==========================================
 
+-- Используем TIMESTAMP (WITHOUT TIME ZONE) для совместимости с Ecto NaiveDateTime
+
 -- 2.1 Страны
-create table if not exists public.ref_countries (
-    id smallserial primary key,
-    name text unique not null, -- Название страны
-    code char(2) -- Буквенный код (RU, FR)
+CREATE TABLE IF NOT EXISTS public.ref_countries (
+    id SMALLSERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    code CHAR(2),
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_countries is 'Справочник стран';
+COMMENT ON TABLE public.ref_countries IS 'Справочник стран';
 
 -- 2.2 Регионы
-create table if not exists public.ref_regions (
-    id smallserial primary key,
-    name text not null, -- Название региона
-    country_id smallint references public.ref_countries(id), -- Ссылка на страну
-    unique(name, country_id) -- Уникальность названия в рамках страны
+CREATE TABLE IF NOT EXISTS public.ref_regions (
+    id SMALLSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    country_id SMALLINT REFERENCES public.ref_countries(id),
+    UNIQUE(name, country_id),
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_regions is 'Справочник винодельческих регионов';
+COMMENT ON TABLE public.ref_regions IS 'Справочник регионов';
 
 -- 2.3 Производители
-create table if not exists public.ref_producers (
-    id serial primary key,
-    name text unique not null -- Название производителя/бренда
+CREATE TABLE IF NOT EXISTS public.ref_producers (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_producers is 'Справочник производителей вина';
+COMMENT ON TABLE public.ref_producers IS 'Справочник производителей';
 
 -- 2.4 Типы вина
-create table if not exists public.ref_wine_types (
-    id smallserial primary key,
-    name text unique not null -- Тип: Белое, Красное, Игристое
+CREATE TABLE IF NOT EXISTS public.ref_wine_types (
+    id SMALLSERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_wine_types is 'Справочник типов вина';
+COMMENT ON TABLE public.ref_wine_types IS 'Типы вина';
 
 -- 2.5 Сорта винограда
-create table if not exists public.ref_grapes (
-    id smallserial primary key,
-    name text unique not null -- Название сорта
+CREATE TABLE IF NOT EXISTS public.ref_grapes (
+    id SMALLSERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_grapes is 'Справочник сортов винограда';
+COMMENT ON TABLE public.ref_grapes IS 'Сорта винограда';
 
--- 2.6 Цвет вина (визуальный)
-create table if not exists public.ref_colors (
-    id smallserial primary key,
-    name text unique not null -- Золотой, Рубиновый и т.д.
+-- 2.6 Цвет вина
+CREATE TABLE IF NOT EXISTS public.ref_colors (
+    id SMALLSERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_colors is 'Справочник цветов вина';
+COMMENT ON TABLE public.ref_colors IS 'Цвета вина';
 
--- 2.7 Универсальный справочник уровней (органолептика)
-create table if not exists public.ref_levels (
-    id smallserial primary key,
-    group_name text not null, -- Группа показателя: 'intensity', 'sugar', 'acidity', 'tannins', 'body', 'finish'
-    value text not null, -- Значение: 'Низкая', 'Средняя', 'Высокая'
-    constraint unique_level unique(group_name, value)
+-- 2.7 Уровни (органолептика)
+CREATE TABLE IF NOT EXISTS public.ref_levels (
+    id SMALLSERIAL PRIMARY KEY,
+    group_name TEXT NOT NULL, -- intensity, sugar, acidity, etc.
+    value TEXT NOT NULL,
+    CONSTRAINT unique_level UNIQUE(group_name, value),
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-create index idx_ref_levels_group on public.ref_levels(group_name);
-comment on table public.ref_levels is 'Справочник уровней органолептических свойств';
+CREATE INDEX idx_ref_levels_group ON public.ref_levels(group_name);
+COMMENT ON TABLE public.ref_levels IS 'Уровни органолептики';
 
--- 2.8 Справочник ароматов/вкусов
-create table if not exists public.ref_aromas (
-    id serial primary key,
-    name text unique not null, -- Яблоко, Дуб, Ваниль
-    category text -- Категория для UI: 'Фрукты', 'Ягоды', 'Дуб'
+-- 2.8 Ароматы
+CREATE TABLE IF NOT EXISTS public.ref_aromas (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    category TEXT,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-comment on table public.ref_aromas is 'Справочник дескрипторов ароматов и вкусов';
+COMMENT ON TABLE public.ref_aromas IS 'Справочник ароматов';
+
+-- Триггеры для справочников
+CREATE TRIGGER update_ref_countries_updated_at BEFORE UPDATE ON public.ref_countries FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_regions_updated_at BEFORE UPDATE ON public.ref_regions FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_producers_updated_at BEFORE UPDATE ON public.ref_producers FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_wine_types_updated_at BEFORE UPDATE ON public.ref_wine_types FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_grapes_updated_at BEFORE UPDATE ON public.ref_grapes FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_colors_updated_at BEFORE UPDATE ON public.ref_colors FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_levels_updated_at BEFORE UPDATE ON public.ref_levels FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_ref_aromas_updated_at BEFORE UPDATE ON public.ref_aromas FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ==========================================
--- 3. ПОЛЬЗОВАТЕЛИ И ПРОФИЛИ
+-- 3. ПОЛЬЗОВАТЕЛИ
 -- ==========================================
 
--- 3.1 Пользователи (Auth)
-create table if not exists public.users (
-    id uuid default gen_random_uuid() primary key,
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-    telegram_id bigint unique, -- ID пользователя в Telegram
-    email text -- Email (если будет веб-версия)
+CREATE TABLE IF NOT EXISTS public.users (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    
+    -- ИСПРАВЛЕНО: TIMESTAMP WITHOUT TIME ZONE
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    telegram_id BIGINT UNIQUE,
+    email TEXT
 );
-comment on table public.users is 'Основная таблица пользователей';
+COMMENT ON TABLE public.users IS 'Пользователи';
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 3.2 Профили (Social)
-create table if not exists public.profiles (
-    user_id uuid primary key references public.users(id) on delete cascade,
-    updated_at timestamp with time zone default timezone('utc'::text, now()),
-    display_name text, -- Отображаемое имя
-    avatar_url text, -- Ссылка на аватар
-    social_links jsonb, -- JSON со ссылками на соцсети {"instagram": "@user"}
-    is_private boolean default true -- Флаг приватности профиля
+CREATE TABLE IF NOT EXISTS public.profiles (
+    user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    display_name TEXT,
+    avatar_url TEXT,
+    social_links JSONB,
+    is_private BOOLEAN DEFAULT TRUE
 );
-comment on table public.profiles is 'Профили пользователей (социальные данные)';
+COMMENT ON TABLE public.profiles IS 'Профили';
+CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- Триггер: Создавать профиль автоматически при создании пользователя
-create or replace function public.handle_new_user()
-returns trigger as $$ begin
-    insert into public.profiles (user_id)
-    values (new.id);
-    return new;
-end;
- $$ language plpgsql security definer;
+-- Триггер создания профиля
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$ BEGIN
+    INSERT INTO public.profiles (user_id) VALUES (NEW.id);
+    RETURN NEW;
+END;
+ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-create trigger on_create_user
-    after insert on public.users
-    for each row execute function public.handle_new_user();
+CREATE TRIGGER on_create_user
+    AFTER INSERT ON public.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ==========================================
--- 4. ВИНА (WINES)
+-- 4. ВИНА
 -- ==========================================
 
--- 4.1 Паспорт вина
-create table if not exists public.wines (
-    id uuid default gen_random_uuid() primary key,
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-    created_by_user_id uuid references public.users(id), -- Кто добавил вино в базу
+CREATE TABLE IF NOT EXISTS public.wines (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_by_user_id UUID REFERENCES public.users(id),
     
-    name text not null, -- Название вина (обязательно)
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     
-    -- Поля с выбором из справочника ИЛИ ручной ввод
-    producer_id integer references public.ref_producers(id),
-    producer_custom text, 
+    name TEXT NOT NULL,
     
-    country_id smallint references public.ref_countries(id),
-    country_custom text,
+    producer_id INTEGER REFERENCES public.ref_producers(id),
+    producer_custom TEXT,
     
-    region_id smallint references public.ref_regions(id),
-    region_custom text,
+    country_id SMALLINT REFERENCES public.ref_countries(id),
+    country_custom TEXT,
     
-    wine_type_id smallint references public.ref_wine_types(id),
-    wine_type_custom text
+    region_id SMALLINT REFERENCES public.ref_regions(id),
+    region_custom TEXT,
+    
+    wine_type_id SMALLINT REFERENCES public.ref_wine_types(id),
+    wine_type_custom TEXT
 );
 
--- Constraints: Либо ID, либо Custom, либо ничего (но не оба сразу)
-alter table public.wines add constraint check_producer check (num_nonnulls(producer_id, producer_custom) <= 1);
-alter table public.wines add constraint check_country check (num_nonnulls(country_id, country_custom) <= 1);
-alter table public.wines add constraint check_region check (num_nonnulls(region_id, region_custom) <= 1);
-alter table public.wines add constraint check_wine_type check (num_nonnulls(wine_type_id, wine_type_custom) <= 1);
+ALTER TABLE public.wines ADD CONSTRAINT check_producer CHECK (num_nonnulls(producer_id, producer_custom) <= 1);
+ALTER TABLE public.wines ADD CONSTRAINT check_country CHECK (num_nonnulls(country_id, country_custom) <= 1);
+ALTER TABLE public.wines ADD CONSTRAINT check_region CHECK (num_nonnulls(region_id, region_custom) <= 1);
+ALTER TABLE public.wines ADD CONSTRAINT check_wine_type CHECK (num_nonnulls(wine_type_id, wine_type_custom) <= 1);
 
-comment on table public.wines is 'Справочник вин (паспорт вина)';
+CREATE TRIGGER update_wines_updated_at BEFORE UPDATE ON public.wines FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+COMMENT ON TABLE public.wines IS 'Каталог вин';
 
--- 4.2 Цены вина в магазинах
-create table if not exists public.wine_prices (
-    id serial primary key,
-    wine_id uuid not null references public.wines(id) on delete cascade,
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-    shop_name text not null, -- Название магазина
-    shop_url text, -- Ссылка
-    price numeric(10, 2) not null, -- Цена
-    currency char(3) default 'RUB', -- Валюта
-    is_active boolean default true -- Актуальность цены
+CREATE TABLE IF NOT EXISTS public.wine_prices (
+    id SERIAL PRIMARY KEY,
+    wine_id UUID NOT NULL REFERENCES public.wines(id) ON DELETE CASCADE,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    shop_name TEXT NOT NULL,
+    shop_url TEXT,
+    price NUMERIC(10, 2) NOT NULL,
+    currency CHAR(3) DEFAULT 'RUB',
+    is_active BOOLEAN DEFAULT TRUE
 );
-comment on table public.wines is 'История цен на вино в разных магазинах';
+CREATE TRIGGER update_wine_prices_updated_at BEFORE UPDATE ON public.wine_prices FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 4.3 Сорта винограда в вине (Связующая таблица)
-create table if not exists public.wine_grapes (
-    id serial primary key,
-    wine_id uuid not null references public.wines(id) on delete cascade,
-    grape_id integer references public.ref_grapes(id),
-    grape_custom text, -- Свой сорт
-    is_main boolean default false, -- Основной сорт или купажный
-    percent integer, -- Процент (если известен)
-    constraint check_grape_source check (num_nonnulls(grape_id, grape_custom) = 1) -- Обязательно наличие одного
+CREATE TABLE IF NOT EXISTS public.wine_grapes (
+    id SERIAL PRIMARY KEY,
+    wine_id UUID NOT NULL REFERENCES public.wines(id) ON DELETE CASCADE,
+    grape_id INTEGER REFERENCES public.ref_grapes(id),
+    grape_custom TEXT,
+    is_main BOOLEAN DEFAULT FALSE,
+    percent INTEGER,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    CONSTRAINT check_grape_source CHECK (num_nonnulls(grape_id, grape_custom) = 1)
 );
-comment on table public.wine_grapes is 'Состав вина (сорта винограда)';
+CREATE TRIGGER update_wine_grapes_updated_at BEFORE UPDATE ON public.wine_grapes FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ==========================================
--- 5. ДЕГУСТАЦИИ (TASTINGS)
+-- 5. ДЕГУСТАЦИИ
 -- ==========================================
 
--- 5.1 Записи дегустаций
-create table if not exists public.tastings (
-    id uuid default gen_random_uuid() primary key,
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-    user_id uuid not null references public.users(id) on delete cascade, -- Кто пробовал
-    wine_id uuid not null references public.wines(id) on delete cascade, -- Какое вино
+CREATE TABLE IF NOT EXISTS public.tastings (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    wine_id UUID NOT NULL REFERENCES public.wines(id) ON DELETE CASCADE,
     
-    tasting_date date not null, -- Дата дегустации
-    vintage integer, -- Винтаж (год урожая)
-    purchase_price numeric(10, 2), -- Цена покупки
-    purchase_place text, -- Место покупки
-    purchase_coords point, -- Координаты на карте
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     
-    rating numeric(3, 2), -- Оценка (0.00 - 10.00)
-    general_comment text, -- Общий комментарий
+    tasting_date DATE NOT NULL,
+    vintage INTEGER,
+    purchase_price NUMERIC(10, 2),
+    purchase_place TEXT,
+    purchase_coords POINT,
     
-    constraint check_rating_range check (rating >= 0.0 and rating <= 10.0)
+    rating NUMERIC(3, 2), -- 0-10
+    general_comment TEXT,
+    
+    CONSTRAINT check_rating_range CHECK (rating >= 0.0 AND rating <= 10.0)
 );
-comment on table public.tastings is 'Записи дегустаций';
+CREATE TRIGGER update_tastings_updated_at BEFORE UPDATE ON public.tastings FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 5.2 Органолептика
-create table if not exists public.tasting_notes (
-    id uuid default gen_random_uuid() primary key,
-    tasting_id uuid not null references public.tastings(id) on delete cascade,
+CREATE TABLE IF NOT EXISTS public.tasting_notes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tasting_id UUID NOT NULL REFERENCES public.tastings(id) ON DELETE CASCADE,
     
-    -- Визуал
-    color_id smallint references public.ref_colors(id), color_custom text,
-    color_intensity_id smallint references public.ref_levels(id), color_intensity_custom text,
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     
-    -- Аромат
-    aroma_intensity_id smallint references public.ref_levels(id), aroma_intensity_custom text,
+    color_id SMALLINT REFERENCES public.ref_colors(id), color_custom TEXT,
+    color_intensity_id SMALLINT REFERENCES public.ref_levels(id), color_intensity_custom TEXT,
     
-    -- Вкус
-    taste_intensity_id smallint references public.ref_levels(id), taste_intensity_custom text,
-    sugar_id smallint references public.ref_levels(id), sugar_custom text,
-    acidity_id smallint references public.ref_levels(id), acidity_custom text,
-    tannins_id smallint references public.ref_levels(id), tannins_custom text,
-    alcohol_id smallint references public.ref_levels(id), alcohol_custom text,
-    body_id smallint references public.ref_levels(id), body_custom text,
-    finish_id smallint references public.ref_levels(id), finish_custom text
+    aroma_intensity_id SMALLINT REFERENCES public.ref_levels(id), aroma_intensity_custom TEXT,
+    
+    taste_intensity_id SMALLINT REFERENCES public.ref_levels(id), taste_intensity_custom TEXT,
+    sugar_id SMALLINT REFERENCES public.ref_levels(id), sugar_custom TEXT,
+    acidity_id SMALLINT REFERENCES public.ref_levels(id), acidity_custom TEXT,
+    tannins_id SMALLINT REFERENCES public.ref_levels(id), tannins_custom TEXT,
+    alcohol_id SMALLINT REFERENCES public.ref_levels(id), alcohol_custom TEXT,
+    body_id SMALLINT REFERENCES public.ref_levels(id), body_custom TEXT,
+    finish_id SMALLINT REFERENCES public.ref_levels(id), finish_custom TEXT
 );
 
--- Constraints для tasting_notes
-alter table public.tasting_notes add constraint check_color check (num_nonnulls(color_id, color_custom) <= 1);
-alter table public.tasting_notes add constraint check_color_int check (num_nonnulls(color_intensity_id, color_intensity_custom) <= 1);
-alter table public.tasting_notes add constraint check_aroma_int check (num_nonnulls(aroma_intensity_id, aroma_intensity_custom) <= 1);
-alter table public.tasting_notes add constraint check_taste_int check (num_nonnulls(taste_intensity_id, taste_intensity_custom) <= 1);
-alter table public.tasting_notes add constraint check_sugar check (num_nonnulls(sugar_id, sugar_custom) <= 1);
-alter table public.tasting_notes add constraint check_acidity check (num_nonnulls(acidity_id, acidity_custom) <= 1);
-alter table public.tasting_notes add constraint check_tannins check (num_nonnulls(tannins_id, tannins_custom) <= 1);
-alter table public.tasting_notes add constraint check_alcohol check (num_nonnulls(alcohol_id, alcohol_custom) <= 1);
-alter table public.tasting_notes add constraint check_body check (num_nonnulls(body_id, body_custom) <= 1);
-alter table public.tasting_notes add constraint check_finish check (num_nonnulls(finish_id, finish_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_color CHECK (num_nonnulls(color_id, color_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_color_int CHECK (num_nonnulls(color_intensity_id, color_intensity_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_aroma_int CHECK (num_nonnulls(aroma_intensity_id, aroma_intensity_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_taste_int CHECK (num_nonnulls(taste_intensity_id, taste_intensity_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_sugar CHECK (num_nonnulls(sugar_id, sugar_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_acidity CHECK (num_nonnulls(acidity_id, acidity_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_tannins CHECK (num_nonnulls(tannins_id, tannins_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_alcohol CHECK (num_nonnulls(alcohol_id, alcohol_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_body CHECK (num_nonnulls(body_id, body_custom) <= 1);
+ALTER TABLE public.tasting_notes ADD CONSTRAINT check_finish CHECK (num_nonnulls(finish_id, finish_custom) <= 1);
 
-comment on table public.tasting_notes is 'Органолептические свойства дегустации';
+CREATE TRIGGER update_tasting_notes_updated_at BEFORE UPDATE ON public.tasting_notes FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 5.3 Фотографии дегустации
-create table if not exists public.tasting_photos (
-    id uuid default gen_random_uuid() primary key,
-    tasting_id uuid not null references public.tastings(id) on delete cascade,
-    created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-    image_url text not null, -- URL из Supabase Storage
-    is_main boolean default false 
+CREATE TABLE IF NOT EXISTS public.tasting_photos (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    tasting_id UUID NOT NULL REFERENCES public.tastings(id) ON DELETE CASCADE,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    image_url TEXT NOT NULL,
+    is_main BOOLEAN DEFAULT FALSE
 );
-create unique index idx_unique_main_photo on public.tasting_photos (tasting_id) where (is_main = true); -- Только одно главное фото
-comment on table public.tasting_photos is 'Фотографии к дегустации';
+CREATE UNIQUE INDEX idx_unique_main_photo ON public.tasting_photos (tasting_id) WHERE (is_main = TRUE);
+CREATE TRIGGER update_tasting_photos_updated_at BEFORE UPDATE ON public.tasting_photos FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 5.4 Теги ароматов/вкусов (Связующая таблица)
-create table if not exists public.tasting_aroma_tags (
-    id serial primary key,
-    note_id uuid not null references public.tasting_notes(id) on delete cascade,
-    category text not null, -- Категория: 'primary_red', 'secondary_white'
-    aroma_id integer references public.ref_aromas(id),
-    aroma_custom text,
-    constraint check_aroma_tag_source check (num_nonnulls(aroma_id, aroma_custom) = 1)
+CREATE TABLE IF NOT EXISTS public.tasting_aroma_tags (
+    id SERIAL PRIMARY KEY,
+    note_id UUID NOT NULL REFERENCES public.tasting_notes(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    aroma_id INTEGER REFERENCES public.ref_aromas(id),
+    aroma_custom TEXT,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    CONSTRAINT check_aroma_tag_source CHECK (num_nonnulls(aroma_id, aroma_custom) = 1)
 );
-comment on table public.tasting_aroma_tags is 'Теги ароматов для дегустации';
+CREATE TRIGGER update_tasting_aroma_tags_updated_at BEFORE UPDATE ON public.tasting_aroma_tags FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ==========================================
--- 6. СТАТИСТИКА (STATS)
+-- 6. СТАТИСТИКА
 -- ==========================================
 
--- 6.1 Статистика оценок вина (предрасчет)
-create table if not exists public.wine_rating_stats (
-    wine_id uuid primary key references public.wines(id) on delete cascade,
+CREATE TABLE IF NOT EXISTS public.wine_rating_stats (
+    wine_id UUID PRIMARY KEY REFERENCES public.wines(id) ON DELETE CASCADE,
     
-    ratings_count integer default 0, -- Кол-во оценок
-    avg_rating numeric(4, 2), -- Средняя оценка
-    min_rating numeric(3, 2), -- Мин оценка
-    max_rating numeric(3, 2), -- Макс оценка
-    stddev_rating numeric(5, 3), -- Среднеквадратичное отклонение (дисперсия)
-    rating_distribution jsonb, -- JSON для гистограммы {"8.0": 5, "9.0": 2}
-    updated_at timestamp with time zone default timezone('utc'::text, now())
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    ratings_count INTEGER DEFAULT 0,
+    avg_rating NUMERIC(4, 2),
+    min_rating NUMERIC(3, 2),
+    max_rating NUMERIC(3, 2),
+    stddev_rating NUMERIC(5, 3),
+    rating_distribution JSONB
 );
-comment on table public.wine_rating_stats is 'Агрегированная статистика оценок вина';
+CREATE TRIGGER update_wine_rating_stats_updated_at BEFORE UPDATE ON public.wine_rating_stats FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
--- 6.2 Личная статистика пользователя по вину
-create table if not exists public.user_wine_stats (
-    id serial primary key,
-    user_id uuid not null references public.users(id) on delete cascade,
-    wine_id uuid not null references public.wines(id) on delete cascade,
-    tastings_count integer default 0, -- Сколько раз пробовал
-    last_tasted_at date, -- Дата последней пробы
-    unique(user_id, wine_id)
+CREATE TABLE IF NOT EXISTS public.user_wine_stats (
+    id SERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    wine_id UUID NOT NULL REFERENCES public.wines(id) ON DELETE CASCADE,
+    
+    inserted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    
+    tastings_count INTEGER DEFAULT 0,
+    last_tasted_at DATE,
+    UNIQUE(user_id, wine_id)
 );
-comment on table public.user_wine_stats is 'Статистика пользователя: сколько раз пробовал вино';
+CREATE TRIGGER update_user_wine_stats_updated_at BEFORE UPDATE ON public.user_wine_stats FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ==========================================
--- 7. ТРИГГЕРЫ И ФУНКЦИИ (LOGIC)
+-- 7. ТРИГГЕРЫ ЛОГИКИ
 -- ==========================================
 
--- Функция обновления статистики вина
-create or replace function public.update_wine_rating_stats()
-returns trigger as $$ declare
-    w_id uuid;
-begin
+CREATE OR REPLACE FUNCTION public.update_wine_rating_stats()
+RETURNS TRIGGER AS $$ DECLARE
+    w_id UUID;
+BEGIN
     -- Определяем ID вина
-    if tg_op = 'DELETE' then
-        w_id := old.wine_id;
-    else
-        w_id := new.wine_id;
-    end if;
+    IF TG_OP = 'DELETE' THEN 
+        w_id := OLD.wine_id; 
+    ELSE 
+        w_id := NEW.wine_id; 
+    END IF;
 
-    -- Пересчитываем статистику
-    insert into public.wine_rating_stats (wine_id, ratings_count, avg_rating, min_rating, max_rating, stddev_rating, rating_distribution, updated_at)
-    select 
+    -- Пересчет статистики
+    INSERT INTO public.wine_rating_stats (
+        wine_id, ratings_count, avg_rating, min_rating, max_rating, 
+        stddev_rating, rating_distribution, updated_at
+    )
+    SELECT
         t.wine_id,
-        count(t.rating),
-        avg(t.rating),
-        min(t.rating),
-        max(t.rating),
-        stddev_pop(t.rating),
-        jsonb_object_agg(t.rating::text, count(t.rating)),
-        now()
-    from public.tastings t
-    where t.wine_id = w_id and t.rating is not null
-    group by t.wine_id
-    on conflict (wine_id) do update
-    set 
-        ratings_count = excluded.ratings_count,
-        avg_rating = excluded.avg_rating,
-        min_rating = excluded.min_rating,
-        max_rating = excluded.max_rating,
-        stddev_rating = excluded.stddev_rating,
-        rating_distribution = excluded.rating_distribution,
-        updated_at = now();
+        COUNT(t.rating),
+        AVG(t.rating),
+        MIN(t.rating),
+        MAX(t.rating),
+        STDDEV_POP(t.rating),
+        -- ИСПРАВЛЕНО: Расчет распределения через подзапрос
+        -- Сначала группируем по оценкам, считаем количество, потом собираем JSON
+        (SELECT jsonb_object_agg(sub.rating::text, sub.cnt)
+         FROM (
+             SELECT rating, COUNT(*) as cnt
+             FROM public.tastings t_sub
+             WHERE t_sub.wine_id = w_id AND t_sub.rating IS NOT NULL
+             GROUP BY rating
+         ) sub
+        ),
+        NOW()
+    FROM public.tastings t
+    WHERE t.wine_id = w_id AND t.rating IS NOT NULL
+    GROUP BY t.wine_id
+    ON CONFLICT (wine_id) DO UPDATE
+    SET 
+        ratings_count = EXCLUDED.ratings_count,
+        avg_rating = EXCLUDED.avg_rating,
+        min_rating = EXCLUDED.min_rating,
+        max_rating = EXCLUDED.max_rating,
+        stddev_rating = EXCLUDED.stddev_rating,
+        rating_distribution = EXCLUDED.rating_distribution,
+        updated_at = NOW();
 
-    -- Удаляем запись статистики, если оценок не осталось
-    delete from public.wine_rating_stats where wine_id = w_id and ratings_count = 0;
+    -- Удаляем статистику, если оценок не осталось
+    DELETE FROM public.wine_rating_stats WHERE wine_id = w_id AND ratings_count = 0;
 
-    -- Обновляем личную статистику пользователя
-    if tg_op = 'INSERT' then
-        insert into public.user_wine_stats (user_id, wine_id, tastings_count, last_tasted_at)
-        values (new.user_id, new.wine_id, 1, new.tasting_date)
-        on conflict (user_id, wine_id) do update
-        set tastings_count = user_wine_stats.tastings_count + 1,
-            last_tasted_at = greatest(user_wine_stats.last_tasted_at, new.tasting_date);
+    -- Обновление личной статистики пользователя
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO public.user_wine_stats (user_id, wine_id, tastings_count, last_tasted_at, updated_at)
+        VALUES (NEW.user_id, NEW.wine_id, 1, NEW.tasting_date, NOW())
+        ON CONFLICT (user_id, wine_id) DO UPDATE
+        SET 
+            tastings_count = user_wine_stats.tastings_count + 1,
+            last_tasted_at = GREATEST(user_wine_stats.last_tasted_at, NEW.tasting_date),
+            updated_at = NOW();
     
-    elsif tg_op = 'DELETE' then
-        update public.user_wine_stats
-        set tastings_count = tastings_count - 1
-        where user_id = old.user_id and wine_id = old.wine_id;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE public.user_wine_stats
+        SET tastings_count = tastings_count - 1, updated_at = NOW()
+        WHERE user_id = OLD.user_id AND wine_id = OLD.wine_id;
         
-        delete from public.user_wine_stats where tastings_count <= 0;
-    end if;
+        DELETE FROM public.user_wine_stats WHERE tastings_count <= 0;
+    END IF;
 
-    return null;
-end;
- $$ language plpgsql;
+    RETURN NULL;
+END;
+ $$ LANGUAGE plpgsql;
 
--- Триггер на таблицу tastings
-create trigger on_tasting_change
-after insert or update of rating, wine_id or delete
-on public.tastings
-for each row
-execute function public.update_wine_rating_stats();
+CREATE TRIGGER on_tasting_change
+AFTER INSERT OR UPDATE OF rating, wine_id OR DELETE
+ON public.tastings
+FOR EACH ROW
+EXECUTE FUNCTION public.update_wine_rating_stats();
 
 -- ==========================================
 -- 8. БЕЗОПАСНОСТЬ (RLS)
 -- ==========================================
 
--- Включаем RLS на всех таблицах
-alter table public.users enable row level security;
-alter table public.profiles enable row level security;
-alter table public.wines enable row level security;
-alter table public.tastings enable row level security;
-alter table public.tasting_notes enable row level security;
-alter table public.tasting_photos enable row level security;
-alter table public.tasting_aroma_tags enable row level security;
-alter table public.wine_rating_stats enable row level security;
-alter table public.user_wine_stats enable row level security;
--- Для справочников RLS обычно открыт на чтение
-alter table public.ref_countries enable row level security;
-alter table public.ref_regions enable row level security;
-alter table public.ref_producers enable row level security;
-alter table public.ref_wine_types enable row level security;
-alter table public.ref_grapes enable row level security;
-alter table public.ref_colors enable row level security;
-alter table public.ref_levels enable row level security;
-alter table public.ref_aromas enable row level security;
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tastings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tasting_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tasting_photos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tasting_aroma_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wine_rating_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_wine_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_countries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_regions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_producers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_wine_types ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_grapes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_colors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_levels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ref_aromas ENABLE ROW LEVEL SECURITY;
 
--- Пример политик (Open Policy для API доступа при разработке)
-CREATE POLICY "Open access" ON public.users FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.profiles FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.wines FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.tastings FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.tasting_notes FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.tasting_photos FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.tasting_aroma_tags FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.wine_rating_stats FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.user_wine_stats FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_countries FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_regions FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_producers FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_wine_types FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_grapes FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_colors FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_levels FOR ALL USING (true);
-CREATE POLICY "Open access" ON public.ref_aromas FOR ALL USING (true);
+DO $$ 
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' LOOP
+        EXECUTE format('CREATE POLICY "Open access" ON public.%I FOR ALL USING (true)', r.table_name);
+    END LOOP;
+END $$;
+
+-- ==========================================
+-- 9. НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ (SEEDS)
+-- ==========================================
+
+INSERT INTO public.ref_levels (group_name, value) VALUES
+('intensity', 'Легкая'), ('intensity', 'Средняя'), ('intensity', 'Выраженная'), ('intensity', 'Глубокий'),
+('sugar', 'Сухое'), ('sugar', 'Полусухое'), ('sugar', 'Полусладкое'), ('sugar', 'Сладкое'),
+('acidity', 'Низкая'), ('acidity', 'Средняя'), ('acidity', 'Высокая'),
+('tannins', 'Низкие'), ('tannins', 'Средние'), ('tannins', 'Высокие'),
+('alcohol', 'Низкий'), ('alcohol', 'Средний'), ('alcohol', 'Высокий'),
+('body', 'Легкое'), ('body', 'Среднее'), ('body', 'Полное'),
+('finish', 'Короткое'), ('finish', 'Среднее'), ('finish', 'Долгое');
+
+INSERT INTO public.ref_wine_types (name) VALUES 
+('Белое тихое'), ('Красное тихое'), ('Розовое тихое'), ('Игристое'), ('Оранжевое'), ('Десертное');
+
+INSERT INTO public.ref_colors (name) VALUES 
+('Золотой'), ('Лимонный'), ('Гранатовый'), ('Рубиновый'), ('Кирпичный'), ('Розовый'), ('Соломенный');
