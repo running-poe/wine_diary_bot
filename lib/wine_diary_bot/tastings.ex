@@ -3,6 +3,8 @@ defmodule WineDiaryBot.Tastings do
   alias WineDiaryBot.Repo
   alias WineDiaryBot.Tastings.{Tasting, Wine, TastingPhoto, WineType, Level, Color, TastingNote}
 
+  # ... остальные функции ...
+
   def list_wine_types do
     WineType |> order_by(:name) |> Repo.all()
   end
@@ -18,7 +20,6 @@ defmodule WineDiaryBot.Tastings do
     |> Repo.all()
   end
 
-  # ИСПРАВЛЕНО: Функция теперь принимает opts
   def get_or_create_wine(name, opts \\ %{}) do
     case Repo.get_by(Wine, name: name) do
       nil ->
@@ -31,12 +32,13 @@ defmodule WineDiaryBot.Tastings do
     end
   end
 
+  # ИЗМЕНЕНО: Добавлен preload :note
   def list_tastings(user_id, limit \\ 10) do
     Tasting
     |> where(user_id: ^user_id)
     |> order_by(desc: :tasting_date)
     |> limit(^limit)
-    |> preload([:wine, :photos])
+    |> preload([:wine, :photos, :note])
     |> Repo.all()
   end
 

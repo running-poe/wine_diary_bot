@@ -2,10 +2,9 @@ defmodule WineDiaryBot.Tastings.Tasting do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias WineDiaryBot.Tastings.{TastingPhoto, Wine}
+  alias WineDiaryBot.Tastings.{TastingPhoto, Wine, TastingNote}
   alias WineDiaryBot.Accounts.User
 
-  # ВАЖНО: UUID настройки
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -21,6 +20,9 @@ defmodule WineDiaryBot.Tastings.Tasting do
     belongs_to :wine, Wine
 
     has_many :photos, TastingPhoto, on_replace: :delete
+
+    # ДОБАВЛЕНО: Связь с органолептикой
+    has_one :note, TastingNote
 
     timestamps()
   end

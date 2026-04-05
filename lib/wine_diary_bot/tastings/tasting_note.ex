@@ -31,8 +31,8 @@ defmodule WineDiaryBot.Tastings.TastingNote do
     belongs_to :tannins, WineDiaryBot.Tastings.Level, type: :id
     field :tannins_custom, :string
 
-    belongs_to :alcohol, WineDiaryBot.Tastings.Level, type: :id
-    field :alcohol_custom, :string
+    # ИЗМЕНЕНО: Удаляем старые ссылки на alcohol_id, добавляем числовое поле
+    field :abv, :decimal
 
     belongs_to :body, WineDiaryBot.Tastings.Level, type: :id
     field :body_custom, :string
@@ -56,7 +56,7 @@ defmodule WineDiaryBot.Tastings.TastingNote do
       :sugar_id, :sugar_custom,
       :acidity_id, :acidity_custom,
       :tannins_id, :tannins_custom,
-      :alcohol_id, :alcohol_custom,
+      :abv, # Добавлено
       :body_id, :body_custom,
       :finish_id, :finish_custom
     ])
