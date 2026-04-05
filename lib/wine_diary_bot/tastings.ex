@@ -1,50 +1,45 @@
 defmodule WineDiaryBot.Tastings do
   import Ecto.Query, warn: false
   alias WineDiaryBot.Repo
-  alias WineDiaryBot.Tastings.{Tasting, Wine, TastingPhoto, WineType}
+  alias WineDiaryBot.Tastings.{Tasting, Wine, TastingPhoto, WineType, Level, Color, TastingNote}
 
-  @doc """
-  Возвращает список всех типов вин для кнопок.
-  """
   def list_wine_types do
-    WineType
-    |> order_by(:name)
+    WineType |> order_by(:name) |> Repo.all()
+  end
+
+  def list_colors do
+    Color |> order_by(:name) |> Repo.all()
+  end
+
+  def list_levels_by_group(group_name) do
+    Level
+    |> where(group_name: ^group_name)
+    |> order_by(:id)
     |> Repo.all()
   end
 
-  @doc """
-  Возвращает список дегустаций для пользователя с предзагруженными вином и фото.
-  """
-  def list_tastings(user_id, limit \\ 10) do
-    Tasting
-    |> where(user_id: ^user_id)
-    |> order_by(desc: :tasting_date)
-    |> limit(^limit)
-    |> preload([:wine, :photos]) # Важно: подгружаем фото
-    |> Repo.all()
-  end
-
-  @doc """
-  Создает или находит вино по названию.
-  Принимает дополнительный параметр opts с полями :wine_type_id или :wine_type_custom.
-  """
+  # ИСПРАВЛЕНО: Функция теперь принимает opts
   def get_or_create_wine(name, opts \\ %{}) do
     case Repo.get_by(Wine, name: name) do
       nil ->
-        # Если вина нет, создаем с переданными параметрами (тип, страна и т.д.)
         attrs = Map.merge(%{name: name}, opts)
         %Wine{}
         |> Wine.changeset(attrs)
         |> Repo.insert()
 
-      wine ->
-        {:ok, wine}
+      wine -> {:ok, wine}
     end
   end
 
-  @doc """
-  Сохраняет дегустацию и фото в одной транзакции.
-  """
+  def list_tastings(user_id, limit \\ 10) do
+    Tasting
+    |> where(user_id: ^user_id)
+    |> order_by(desc: :tasting_date)
+    |> limit(^limit)
+    |> preload([:wine, :photos])
+    |> Repo.all()
+  end
+
   def save_tasting(attrs) do
     Ecto.Multi.new()
     |> Ecto.Multi.insert(:tasting, Tasting.changeset(%Tasting{}, attrs))
@@ -59,6 +54,16 @@ defmodule WineDiaryBot.Tastings do
             is_main: true
           })
           |> repo.insert()
+      end
+    end)
+    |> Ecto.Multi.run(:notes, fn repo, %{tasting: tasting} ->
+      notes_attrs = Map.get(attrs, :notes, %{})
+      if map_size(notes_attrs) > 0 do
+        %TastingNote{tasting_id: tasting.id}
+        |> TastingNote.changeset(notes_attrs)
+        |> repo.insert()
+      else
+        {:ok, nil}
       end
     end)
     |> Repo.transaction()

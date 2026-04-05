@@ -7,6 +7,20 @@ defmodule WineDiaryBot.Bot.Handler do
   alias WineDiaryBot.Tastings
   alias WineDiaryBot.Tastings.TastingPhoto
 
+  # Порядок шагов органолептики
+  @org_steps [
+    {:color, "Цвет вина", "color"},
+    {:color_intensity, "Интенсивность цвета", "intensity"},
+    {:aroma_intensity, "Интенсивность аромата", "intensity"},
+    {:taste_intensity, "Интенсивность вкуса", "intensity"},
+    {:sugar, "Сладость", "sugar"},
+    {:acidity, "Кислотность", "acidity"},
+    {:tannins, "Танины", "tannins"},
+    {:alcohol, "Алкоголь", "alcohol"},
+    {:body, "Тело", "body"},
+    {:finish, "Послевкусие", "finish"}
+  ]
+
   # ==========================================
   # API & GenServer Callbacks
   # ==========================================
@@ -62,7 +76,7 @@ defmodule WineDiaryBot.Bot.Handler do
     chat_id = callback.message.chat.id
     telegram_id = callback.from.id
 
-    Logger.debug("[Handler.handle_cast] Received callback: '#{callback.data}' from telegram_id: #{telegram_id}")
+    Logger.debug("[Handler.handle_cast] Received callback: #{callback.data} from telegram_id: #{telegram_id}")
 
     state = ensure_user(state, telegram_id)
     state = Map.put(state, :chat_id, chat_id)
@@ -76,20 +90,18 @@ defmodule WineDiaryBot.Bot.Handler do
 
   defp ensure_user(state, telegram_id) do
     case state[:user] do
-      %{telegram_id: ^telegram_id} ->
-        Logger.debug("[Handler.ensure_user] User found in state: #{telegram_id}")
-        state
+      %{telegram_id: ^telegram_id} -> state
       _ ->
-        Logger.debug("[Handler.ensure_user] Fetching/Creating user from DB: #{telegram_id}")
+        Logger.debug("[Handler.ensure_user] Fetching user from DB: #{telegram_id}")
         {:ok, user} = Accounts.get_or_create_user(telegram_id)
-        Logger.debug("[Handler.ensure_user] User ensured. DB ID: #{user.id}")
+        Logger.info("[Handler.ensure_user] User ensured: ID #{user.id}")
         Map.put(state, :user, user)
     end
   end
 
   defp reset_state(state) do
-    Logger.debug("[Handler.reset_state] Clearing step and tasting_data.")
-    Map.put(state, :step, nil) |> Map.put(:tasting_data, nil)
+    Logger.debug("[Handler.reset_state] Resetting state.")
+    Map.merge(state, %{step: nil, tasting_data: nil, org_step_index: nil, notes_data: nil, org_message_id: nil})
   end
 
   # ==========================================
@@ -97,139 +109,142 @@ defmodule WineDiaryBot.Bot.Handler do
   # ==========================================
 
   defp handle_text_message("/start", state) do
-    Logger.debug("[Handler.handle_text_message] Command: /start")
-    text = """
-    🍷 *Добро пожаловать в Wine Diary!*
+    Logger.info("[Handler.handle_text_message] Command: /start")
 
-    Я помогу вам вести учет ваших винных впечатлений.
+    text = "🍷 *Добро пожаловать в Wine Diary!*"
+    buttons = [
+      [%{text: "🆕 Новая дегустация", callback_data: "action:new"}],
+      [%{text: "📜 Мои дегустации", callback_data: "action:list"}]
+    ]
 
-    _Команды:_
-    /new — Добавить новую дегустацию
-    /list — Посмотреть мои дегустации
-    """
-
-    send_message(state.chat_id, text, parse_mode: "Markdown")
+    send_message(state.chat_id, text, parse_mode: "Markdown", reply_markup: %{inline_keyboard: buttons})
     {:noreply, reset_state(state)}
   end
 
   defp handle_text_message("/new", state) do
-    Logger.debug("[Handler.handle_text_message] Command: /new")
+    Logger.info("[Handler.handle_text_message] Command: /new")
     text = "🍇 *Начинаем новую дегустацию!*\n\nКак называется вино?"
     send_message(state.chat_id, text, parse_mode: "Markdown")
     {:noreply, Map.put(state, :step, :awaiting_name) |> Map.put(:tasting_data, %{})}
   end
 
   defp handle_text_message("/list", state) do
-    Logger.debug("[Handler.handle_text_message] Command: /list")
+    Logger.info("[Handler.handle_text_message] Command: /list")
     show_tastings_list(state)
     {:noreply, reset_state(state)}
   end
 
   defp handle_text_message("/cancel", state) do
-    Logger.debug("[Handler.handle_text_message] Command: /cancel")
+    Logger.info("[Handler.handle_text_message] Command: /cancel")
     send_message(state.chat_id, "❌ Действие отменено.")
     {:noreply, reset_state(state)}
   end
 
-  # --- Step 1: Name ---
-  defp handle_text_message(text, %{step: :awaiting_name} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_name. Input: '#{text}'")
+  # --- Organoleptics Text Input Handler ---
+  defp handle_text_message(text, state) do
+    index = Map.get(state, :org_step_index)
+
+    if not is_nil(index) do
+      Logger.debug("[Handler.handle_text_message] Organoleptics custom input: #{text}")
+      {step_key, _title, _group} = Enum.at(@org_steps, index)
+
+      notes = Map.get(state, :notes_data, %{})
+      notes = Map.put(notes, String.to_atom("#{step_key}_custom"), text)
+      new_state = Map.put(state, :notes_data, notes)
+
+      advance_org_step(new_state)
+    else
+      handle_text_flow(text, state)
+    end
+  end
+
+  # --- Basic Flow ---
+
+  defp handle_text_flow(text, %{step: :awaiting_name} = state) do
+    Logger.debug("[Handler.handle_text_flow] Step: awaiting_name. Input: #{text}")
     data = Map.put(state.tasting_data, :wine_name, text)
-    text = "📅 Отлично, *#{text}*.\n\nУкажите год урожая (винтаж) или отправьте '-', если не знаете."
-    send_message(state.chat_id, text, parse_mode: "Markdown")
+
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_vintage"}]]
+    send_message(state.chat_id, "📅 Год урожая (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
     {:noreply, Map.put(state, :step, :awaiting_vintage) |> Map.put(:tasting_data, data)}
   end
 
-  # --- Step 2: Vintage ---
-  defp handle_text_message(text, %{step: :awaiting_vintage} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_vintage. Input: '#{text}'")
-    vintage = case Integer.parse(text) do
-      {year, _} when year > 1900 and year <= 2100 -> year
-      _ -> nil
-    end
-
+  defp handle_text_flow(text, %{step: :awaiting_vintage} = state) do
+    vintage = case Integer.parse(text) do {y, _} when y > 1900 -> y; _ -> nil end
     data = Map.put(state.tasting_data, :vintage, vintage)
-
-    # Переходим к выбору типа вина
     ask_wine_type(state, data)
   end
 
-  # --- Step 3: Wine Type (Text Input) ---
-  defp handle_text_message(text, %{step: :awaiting_wine_type} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_wine_type. Custom Input: '#{text}'")
-
+  defp handle_text_flow(text, %{step: :awaiting_wine_type} = state) do
     data = Map.put(state.tasting_data, :wine_type_custom, text)
-    text = "💰 Укажите цену покупки (в рублях) или '-' чтобы пропустить."
-    send_message(state.chat_id, text)
+
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_price"}]]
+    send_message(state.chat_id, "💰 Цена (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
     {:noreply, Map.put(state, :step, :awaiting_price) |> Map.put(:tasting_data, data)}
   end
 
-  # --- Step 4: Price ---
-  defp handle_text_message(text, %{step: :awaiting_price} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_price. Input: '#{text}'")
-
-    price = case Decimal.parse(text) do
-      {:ok, val} -> val
-      {val, _remainder} -> val
-      :error -> nil
-    end
-
+  defp handle_text_flow(text, %{step: :awaiting_price} = state) do
+    price = case Decimal.parse(text) do {:ok, v} -> v; {v, _} -> v; _ -> nil end
     data = Map.put(state.tasting_data, :price, price)
 
-    text = "📝 Напишите ваши впечатления и заметки (или '-' чтобы пропустить)."
-    send_message(state.chat_id, text)
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_notes"}]]
+    send_message(state.chat_id, "📝 Заметки (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
     {:noreply, Map.put(state, :step, :awaiting_notes) |> Map.put(:tasting_data, data)}
   end
 
-  # --- Step 5: Notes ---
-  defp handle_text_message(text, %{step: :awaiting_notes} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_notes. Input: '#{text}'")
+  defp handle_text_flow(text, %{step: :awaiting_notes} = state) do
     notes = if text == "-", do: nil, else: text
     data = Map.put(state.tasting_data, :notes, notes)
 
-    text = "⭐ Поставьте оценку от 1 до 10:"
-    send_message(state.chat_id, text)
+    # ИЗМЕНЕНИЕ: Генерируем кнопки для оценки
+    rating_buttons =
+      1..10
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn row ->
+        # ИСПРАВЛЕНО: добавлен аргумент row
+        Enum.map(row, fn i -> %{text: "#{i}", callback_data: "rate:#{i}"} end)
+      end)
+
+    send_message(state.chat_id, "⭐ Поставьте оценку (выберите кнопку или введите число):", reply_markup: %{inline_keyboard: rating_buttons})
+
     {:noreply, Map.put(state, :step, :awaiting_rating) |> Map.put(:tasting_data, data)}
   end
 
-  # --- Step 6: Rating ---
-  defp handle_text_message(text, %{step: :awaiting_rating} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_rating. Input: '#{text}'")
+  defp handle_text_flow(text, %{step: :awaiting_rating} = state) do
     case Integer.parse(text) do
       {rating, _} when rating >= 1 and rating <= 10 ->
         data = Map.put(state.tasting_data, :rating, rating)
 
-        text = "📸 Отправьте фото этикетки или напишите 'skip', чтобы завершить без фото."
-        send_message(state.chat_id, text)
+        buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_photo"}]]
+        send_message(state.chat_id, "📸 Фото этикетки (или пропустить):", reply_markup: %{inline_keyboard: buttons})
 
         {:noreply, Map.put(state, :step, :awaiting_photo) |> Map.put(:tasting_data, data)}
-
       _ ->
-        Logger.warning("[Handler.handle_text_message] Invalid rating input: '#{text}'")
-        send_message(state.chat_id, "⚠️ Пожалуйста, введите число от 1 до 10.")
+        Logger.warning("[Handler.handle_text_flow] Invalid rating input: #{text}")
+        send_message(state.chat_id, "⚠️ Введите число от 1 до 10.")
         {:noreply, state}
     end
   end
 
-  # --- Step 7: Photo Skip ---
-  defp handle_text_message("skip", %{step: :awaiting_photo} = state) do
-    Logger.debug("[Handler.handle_text_message] Step: awaiting_photo. User skipped photo.")
-    finalize_tasting(state)
+  defp handle_text_flow("skip", %{step: :awaiting_photo} = state) do
+    Logger.debug("[Handler.handle_text_flow] Skipping photo.")
+    ask_organoleptics(state)
   end
 
-  defp handle_text_message(_text, %{step: :awaiting_photo} = state) do
-    Logger.warning("[Handler.handle_text_message] Step: awaiting_photo. Invalid text input, expected photo or 'skip'.")
-    send_message(state.chat_id, "Пожалуйста, отправьте фото или напишите 'skip'.")
+  defp handle_text_flow(_text, %{step: :awaiting_photo} = state) do
+    send_message(state.chat_id, "Отправьте фото или 'skip'.")
     {:noreply, state}
   end
 
-  # --- Fallback ---
-  defp handle_text_message(_text, state) do
-    Logger.debug("[Handler.handle_text_message] Unknown text input (Fallback).")
+  # Fallback
+  defp handle_text_flow(_text, state) do
     if state[:step] do
-      send_message(state.chat_id, "Вы находитесь в процессе ввода. Напишите /cancel чтобы отменить.")
+      send_message(state.chat_id, "Вы в процессе ввода. /cancel для отмены.")
     else
-      send_message(state.chat_id, "Я не понял команду. Введите /start.")
+      send_message(state.chat_id, "Не понял команду. /start")
     end
     {:noreply, state}
   end
@@ -239,16 +254,15 @@ defmodule WineDiaryBot.Bot.Handler do
   # ==========================================
 
   defp handle_photo_message(message, %{step: :awaiting_photo} = state) do
-    Logger.debug("[Handler.handle_photo_message] Step: awaiting_photo. Photo received.")
+    Logger.debug("[Handler.handle_photo_message] Photo received.")
     photo = List.last(message.photo)
     data = Map.put(state.tasting_data, :photo_file_id, photo.file_id)
-
-    finalize_tasting(Map.put(state, :tasting_data, data))
+    ask_organoleptics(Map.put(state, :tasting_data, data))
   end
 
   defp handle_photo_message(_message, state) do
-    Logger.warning("[Handler.handle_photo_message] Photo received unexpectedly.")
-    send_message(state.chat_id, "Я не ожидал фото сейчас. Сначала выберите действие (/new).")
+    Logger.warning("[Handler.handle_photo_message] Unexpected photo.")
+    send_message(state.chat_id, "Я не ожидал фото сейчас.")
     {:noreply, state}
   end
 
@@ -257,48 +271,172 @@ defmodule WineDiaryBot.Bot.Handler do
   # ==========================================
 
   defp handle_callback_query(%{data: "action:list"} = callback, state) do
-    Logger.debug("[Handler.handle_callback_query] Action: list")
     Telegex.answer_callback_query(callback.id)
     show_tastings_list(state)
     {:noreply, reset_state(state)}
   end
 
+  defp handle_callback_query(%{data: "action:new"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    text = "🍇 *Начинаем новую дегустацию!*\n\nКак называется вино?"
+    Telegex.send_message(state.chat_id, text, parse_mode: "Markdown")
+    {:noreply, Map.put(state, :step, :awaiting_name) |> Map.put(:tasting_data, %{})}
+  end
+
   defp handle_callback_query(%{data: "action:cancel"} = callback, state) do
-    Logger.debug("[Handler.handle_callback_query] Action: cancel")
     Telegex.answer_callback_query(callback.id)
     send_message(state.chat_id, "Отменено.")
     {:noreply, reset_state(state)}
   end
 
-  # --- Обработка выбора типа вина ---
+  # Wine Type Callbacks
   defp handle_callback_query(%{data: "select_type:skip"} = callback, state) do
-    Logger.debug("[Handler.handle_callback_query] Action: select_type:skip")
     Telegex.answer_callback_query(callback.id)
 
-    data = state.tasting_data
-    text = "💰 Укажите цену покупки (в рублях) или '-' чтобы пропустить."
-    send_message(state.chat_id, text)
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_price"}]]
+    send_message(state.chat_id, "💰 Цена (или пропустить):", reply_markup: %{inline_keyboard: buttons})
 
-    {:noreply, Map.put(state, :step, :awaiting_price) |> Map.put(:tasting_data, data)}
+    {:noreply, Map.put(state, :step, :awaiting_price) |> Map.put(:tasting_data, state.tasting_data)}
   end
 
   defp handle_callback_query(%{data: "select_type:" <> id_str} = callback, state) do
     id = String.to_integer(id_str)
-    Logger.debug("[Handler.handle_callback_query] Action: select_type. ID: #{id}")
+    Telegex.answer_callback_query(callback.id)
+    data = Map.put(state.tasting_data, :wine_type_id, id)
+
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_price"}]]
+    send_message(state.chat_id, "💰 Цена (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
+    {:noreply, Map.put(state, :step, :awaiting_price) |> Map.put(:tasting_data, data)}
+  end
+
+  # Skip callbacks for inputs
+  defp handle_callback_query(%{data: "skip_vintage"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    Logger.debug("[Handler] Skipping vintage via button.")
+    data = Map.put(state.tasting_data, :vintage, nil)
+    ask_wine_type(state, data)
+  end
+
+  defp handle_callback_query(%{data: "skip_price"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    Logger.debug("[Handler] Skipping price via button.")
+    data = Map.put(state.tasting_data, :price, nil)
+
+    buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_notes"}]]
+    send_message(state.chat_id, "📝 Заметки (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
+    {:noreply, Map.put(state, :step, :awaiting_notes) |> Map.put(:tasting_data, data)}
+  end
+
+  defp handle_callback_query(%{data: "skip_notes"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    Logger.debug("[Handler] Skipping notes via button.")
+    data = Map.put(state.tasting_data, :notes, nil)
+
+    # ИЗМЕНЕНИЕ: Генерируем кнопки для оценки
+    rating_buttons =
+      1..10
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn row ->
+        # ИСПРАВЛЕНО: добавлен аргумент row
+        Enum.map(row, fn i -> %{text: "#{i}", callback_data: "rate:#{i}"} end)
+      end)
+
+    send_message(state.chat_id, "⭐ Поставьте оценку (выберите кнопку или введите число):", reply_markup: %{inline_keyboard: rating_buttons})
+
+    {:noreply, Map.put(state, :step, :awaiting_rating) |> Map.put(:tasting_data, data)}
+  end
+
+  # ИЗМЕНЕНИЕ: Обработка нажатия кнопки оценки
+  defp handle_callback_query(%{data: "rate:" <> val_str} = callback, state) do
+    {val, _} = Integer.parse(val_str)
+
+    if val >= 1 and val <= 10 do
+      Telegex.answer_callback_query(callback.id)
+      Logger.info("[Handler] Rating selected via button: #{val}")
+
+      data = Map.put(state.tasting_data, :rating, val)
+
+      # Переход к фото с кнопкой пропуска
+      buttons = [[%{text: "Пропустить ⏭️", callback_data: "skip_photo"}]]
+      send_message(state.chat_id, "📸 Фото этикетки (или пропустить):", reply_markup: %{inline_keyboard: buttons})
+
+      {:noreply, Map.put(state, :step, :awaiting_photo) |> Map.put(:tasting_data, data)}
+    else
+      Telegex.answer_callback_query(callback.id, "Неверная оценка.")
+      {:noreply, state}
+    end
+  end
+
+  defp handle_callback_query(%{data: "skip_photo"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    Logger.debug("[Handler] Skipping photo via button.")
+    ask_organoleptics(state)
+  end
+
+  # Organoleptics: Start
+  defp handle_callback_query(%{data: "org:start"} = callback, state) do
+    if is_nil(state[:tasting_data]) do
+      Logger.warning("[Handler] org:start called with empty state (session expired).")
+      Telegex.answer_callback_query(callback.id, "Сессия устарела. Введите /new")
+      Telegex.delete_message(state.chat_id, callback.message.message_id)
+      {:noreply, reset_state(state)}
+    else
+      Telegex.answer_callback_query(callback.id)
+      Telegex.delete_message(state.chat_id, callback.message.message_id)
+
+      Logger.info("[Handler] Starting organoleptics wizard.")
+      new_state = Map.merge(state, %{org_step_index: 0, notes_data: %{}})
+      msg_id = show_org_step(new_state)
+      {:noreply, Map.put(new_state, :org_message_id, msg_id)}
+    end
+  end
+
+  defp handle_callback_query(%{data: "org:skip"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    Logger.info("[Handler] Skipping organoleptics.")
+    finalize_tasting(state)
+  end
+
+  # Organoleptics: Navigation
+  defp handle_callback_query(%{data: "org:back"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+
+    current_index = Map.get(state, :org_step_index, 0)
+    new_index = max(0, current_index - 1)
+
+    msg_id = Map.get(state, :org_message_id)
+    if msg_id, do: Telegex.delete_message(state.chat_id, msg_id)
+
+    new_state = Map.put(state, :org_step_index, new_index)
+    new_msg_id = show_org_step(new_state)
+    {:noreply, Map.put(new_state, :org_message_id, new_msg_id)}
+  end
+
+  # Organoleptics: Value Selection
+  defp handle_callback_query(%{data: "org:sel:" <> rest} = callback, state) do
+    [field_name, id_str] = String.split(rest, ":", parts: 2)
+    id = String.to_integer(id_str)
 
     Telegex.answer_callback_query(callback.id)
 
-    data = Map.put(state.tasting_data, :wine_type_id, id)
-    text = "💰 Укажите цену покупки (в рублях) или '-' чтобы пропустить."
-    send_message(state.chat_id, text)
+    notes = Map.get(state, :notes_data, %{})
+    notes = Map.put(notes, String.to_atom("#{field_name}_id"), id)
+    new_state = Map.put(state, :notes_data, notes)
 
-    {:noreply, Map.put(state, :step, :awaiting_price) |> Map.put(:tasting_data, data)}
+    advance_org_step(new_state)
+  end
+
+  defp handle_callback_query(%{data: "org:save"} = callback, state) do
+    Telegex.answer_callback_query(callback.id)
+    finalize_tasting(state)
   end
 
   defp handle_callback_query(_callback, state), do: {:noreply, state}
 
   # ==========================================
-  # LOGIC: WINE TYPE SELECTION
+  # LOGIC: HELPERS & SCREENS
   # ==========================================
 
   defp ask_wine_type(state, data) do
@@ -310,129 +448,150 @@ defmodule WineDiaryBot.Bot.Handler do
       end)
       |> Kernel.++([[%{text: "🚫 Пропустить", callback_data: "select_type:skip"}]])
 
-    keyboard = %{inline_keyboard: buttons}
-
-    text = "🍷 Выберите тип вина из списка или напишите свой вариант:"
-
-    Telegex.send_message(state.chat_id, text, reply_markup: keyboard, parse_mode: "Markdown")
-
+    Telegex.send_message(state.chat_id, "🍷 Выберите тип вина:", reply_markup: %{inline_keyboard: buttons})
     {:noreply, Map.put(state, :step, :awaiting_wine_type) |> Map.put(:tasting_data, data)}
   end
 
-  # ==========================================
-  # LOGIC: LIST & SAVE
-  # ==========================================
+  defp ask_organoleptics(state) do
+    text = "🧪 Желаете заполнить органолептические свойства?"
+    buttons = [
+      [%{text: "✅ Да, заполнить", callback_data: "org:start"}],
+      [%{text: "❌ Нет, пропустить", callback_data: "org:skip"}]
+    ]
+    Telegex.send_message(state.chat_id, text, reply_markup: %{inline_keyboard: buttons})
+    {:noreply, Map.put(state, :step, :awaiting_org_decision)}
+  end
 
-  defp show_tastings_list(state) do
-    Logger.debug("[Handler.show_tastings_list] Fetching tastings for user_id: #{state.user.id}")
+  # Функция перехода к следующему шагу
+  defp advance_org_step(state) do
+    current_index = Map.get(state, :org_step_index, 0)
+    next_index = current_index + 1
 
-    try do
-      tastings = Tastings.list_tastings(state.user.id)
-      Logger.debug("[Handler.show_tastings_list] Fetched #{length(tastings)} tastings.")
+    if next_index >= length(@org_steps) do
+      finalize_tasting(state)
+    else
+      msg_id = Map.get(state, :org_message_id)
+      if msg_id, do: Telegex.delete_message(state.chat_id, msg_id)
 
-      if Enum.empty?(tastings) do
-        send_message(state.chat_id, "📝 Ваш список дегустаций пуст.\nДобавьте новую через /new")
+      new_state = Map.put(state, :org_step_index, next_index)
+      new_msg_id = show_org_step(new_state)
+
+      {:noreply, Map.put(new_state, :org_message_id, new_msg_id)}
+    end
+  end
+
+  # Рендер текущего шага органолептики
+  defp show_org_step(state) do
+    index = Map.get(state, :org_step_index, 0)
+
+    if index >= length(@org_steps) do
+      nil
+    else
+      {step_key, title, group} = Enum.at(@org_steps, index)
+
+      items = if step_key == :color do
+        Tastings.list_colors()
+        |> Enum.map(fn item -> %{text: item.name, callback_data: "org:sel:color:#{item.id}"} end)
       else
-        send_message(state.chat_id, "📚 *Ваши последние дегустации:*", parse_mode: "Markdown")
-
-        Enum.each(tastings, fn tasting ->
-          Logger.debug("[Handler.show_tastings_list] Processing tasting ID: #{tasting.id}")
-
-          # Формируем название вина
-          base_name = if tasting.wine, do: tasting.wine.name, else: "Неизвестное вино"
-
-          # ИЗМЕНЕНИЕ: Добавляем год к названию
-          wine_display = if tasting.vintage do
-            "#{base_name}, #{tasting.vintage}"
-          else
-            base_name
-          end
-
-          rating = if tasting.rating, do: "#{tasting.rating}/10", else: "Нет оценки"
-          date = Date.to_string(tasting.tasting_date)
-
-          text = """
-          🍷 *#{wine_display}*
-          📅 _#{date}_
-          ⭐ Оценка: #{rating}
-          """
-
-          photo_url = case tasting.photos do
-            [%TastingPhoto{image_url: url} | _] ->
-              Logger.debug("[Handler.show_tastings_list] Photo found: #{url}")
-              url
-            _ ->
-              Logger.debug("[Handler.show_tastings_list] No photo for tasting #{tasting.id}.")
-              nil
-          end
-
-          if photo_url do
-            Logger.debug("[Handler.show_tastings_list] Calling Telegex.send_photo for chat_id: #{state.chat_id}")
-
-            result = Telegex.send_photo(state.chat_id, photo_url, caption: text, parse_mode: "Markdown")
-
-            case result do
-              {:ok, _message} ->
-                Logger.info("[Handler.show_tastings_list] Photo sent successfully to Telegram.")
-
-              {:error, error} ->
-                Logger.error("[Handler.show_tastings_list] Error sending photo: #{inspect(error)}")
-                send_message(state.chat_id, "#{text}\n⚠️ _Не удалось загрузить фото_", parse_mode: "Markdown")
-            end
-          else
-            Logger.debug("[Handler.show_tastings_list] Sending text only message.")
-            send_message(state.chat_id, text, parse_mode: "Markdown")
-          end
-        end)
+        Tastings.list_levels_by_group(group)
+        |> Enum.map(fn item -> %{text: item.value, callback_data: "org:sel:#{step_key}:#{item.id}"} end)
       end
-    rescue
-      e ->
-        Logger.error("[Handler.show_tastings_list] CRITICAL Exception: #{inspect(e)}")
-        send_message(state.chat_id, "❌ Произошла ошибка при чтении списка. Попробуйте позже.")
+
+      nav_buttons = []
+      nav_buttons = if index > 0, do: nav_buttons ++ [%{text: "⬅️ Назад", callback_data: "org:back"}], else: nav_buttons
+      nav_buttons = nav_buttons ++ [%{text: "🏁 Завершить", callback_data: "org:save"}]
+
+      value_rows = Enum.chunk_every(items, 2)
+      keyboard = value_rows ++ [nav_buttons]
+
+      case Telegex.send_message(state.chat_id, "*#{title}*\n(Можно выбрать кнопку или написать свой вариант)", parse_mode: "Markdown", reply_markup: %{inline_keyboard: keyboard}) do
+        {:ok, message} -> message.message_id
+        _ -> nil
+      end
     end
   end
 
   defp finalize_tasting(state) do
-    data = state.tasting_data
-    user = state.user
+    data = Map.get(state, :tasting_data)
+    user = state[:user]
 
-    Logger.info("[Handler.finalize_tasting] Starting save for user_id: #{user.id}")
-    Logger.debug("[Handler.finalize_tasting] Tasting data: #{inspect(data)}")
+    if is_nil(data) or is_nil(user) do
+      Logger.error("[Handler.finalize_tasting] State lost or user missing.")
+      send_message(state.chat_id, "❌ Сессия устарела. Пожалуйста, начните заново /new")
+      {:noreply, reset_state(state)}
+    else
+      Logger.info("[Handler.finalize_tasting] Saving tasting for User #{user.id}")
 
-    wine_opts = %{
-      wine_type_id: data[:wine_type_id],
-      wine_type_custom: data[:wine_type_custom]
-    }
+      wine_opts = %{
+        wine_type_id: data[:wine_type_id],
+        wine_type_custom: data[:wine_type_custom]
+      }
 
-    {:ok, wine} = Tastings.get_or_create_wine(data.wine_name, wine_opts)
-    Logger.debug("[Handler.finalize_tasting] Wine resolved: #{wine.name} (ID: #{wine.id})")
+      {:ok, wine} = Tastings.get_or_create_wine(data.wine_name, wine_opts)
 
-    attrs = %{
-      user_id: user.id,
-      wine_id: wine.id,
-      tasting_date: Date.utc_today(),
-      vintage: data[:vintage],
-      rating: data[:rating],
-      purchase_price: data[:price],
-      general_comment: data[:notes],
-      photo_file_id: data[:photo_file_id]
-    }
+      attrs = %{
+        user_id: user.id,
+        wine_id: wine.id,
+        tasting_date: Date.utc_today(),
+        vintage: data[:vintage],
+        rating: data[:rating],
+        purchase_price: data[:price],
+        general_comment: data[:notes],
+        photo_file_id: data[:photo_file_id],
+        notes: Map.get(state, :notes_data, %{})
+      }
 
-    case Tastings.save_tasting(attrs) do
-      {:ok, _} ->
-        Logger.info("[Handler.finalize_tasting] Tasting saved successfully.")
-        send_message(state.chat_id, "✅ *Дегустация успешно сохранена!*", parse_mode: "Markdown")
-      {:error, step, changeset, _} ->
-        Logger.error("[Handler.finalize_tasting] Failed at step '#{step}'. Changeset errors: #{inspect(changeset.errors)}")
-        send_message(state.chat_id, "❌ Произошла ошибка при сохранении. Попробуйте позже.")
+      case Tastings.save_tasting(attrs) do
+        {:ok, _} ->
+          Logger.info("[Handler.finalize_tasting] Success.")
+          send_message(state.chat_id, "✅ *Дегустация успешно сохранена!*", parse_mode: "Markdown")
+        {:error, step, changeset, _} ->
+          Logger.error("[Handler.finalize_tasting] Failed at #{step}. Errors: #{inspect(changeset.errors)}")
+          send_message(state.chat_id, "❌ Ошибка при сохранении.")
+      end
+
+      {:noreply, reset_state(state)}
     end
-
-    {:noreply, reset_state(state)}
   end
 
-  # ==========================================
-  # HELPERS
-  # ==========================================
+  defp show_tastings_list(state) do
+    user = state[:user]
+    if is_nil(user) do
+      Logger.error("[Handler.show_tastings_list] User missing in state.")
+      send_message(state.chat_id, "Ошибка авторизации. /start")
+    else
+      tastings = Tastings.list_tastings(user.id)
+
+      if Enum.empty?(tastings) do
+        send_message(state.chat_id, "📝 Список пуст.")
+      else
+        send_message(state.chat_id, "📚 *Ваши дегустации:*", parse_mode: "Markdown")
+
+        Enum.each(tastings, fn tasting ->
+          wine_name = if tasting.wine, do: tasting.wine.name, else: "Неизвестно"
+          wine_display = if tasting.vintage, do: "#{wine_name}, #{tasting.vintage}", else: wine_name
+          rating = if tasting.rating, do: "#{tasting.rating}/10", else: "Нет оценки"
+          date = Date.to_string(tasting.tasting_date)
+
+          text = "🍷 *#{wine_display}*\n📅 _#{date}_\n⭐ Оценка: #{rating}"
+
+          photo_url = case tasting.photos do
+            [%TastingPhoto{image_url: url} | _] -> url
+            _ -> nil
+          end
+
+          if photo_url do
+            case Telegex.send_photo(state.chat_id, photo_url, caption: text, parse_mode: "Markdown") do
+              {:ok, _} -> :ok
+              {:error, _} -> send_message(state.chat_id, "#{text}\n⚠️ _Нет фото_", parse_mode: "Markdown")
+            end
+          else
+            send_message(state.chat_id, text, parse_mode: "Markdown")
+          end
+        end)
+      end
+    end
+  end
 
   defp send_message(chat_id, text, opts \\ []) do
     Telegex.send_message(chat_id, text, opts)
@@ -440,49 +599,33 @@ defmodule WineDiaryBot.Bot.Handler do
 end
 
 # ==========================================
-# UPDATES CONSUMER (Polling Worker)
+# UPDATES CONSUMER
 # ==========================================
 
 defmodule WineDiaryBot.Bot.Handler.UpdatesConsumer do
   use GenServer
-
   require Logger
-
   alias WineDiaryBot.Bot.Handler
 
-  @poll_interval_ms 1000
-
-  def start_link(_) do
-    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
-  end
+  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   def init(state) do
-    Logger.info("[UpdatesConsumer.init] Consumer started. Starting polling loop.")
-    state = Map.put(state, :offset, 0)
-    Process.send_after(self(), :poll, @poll_interval_ms)
-    {:ok, state}
+    Logger.info("[UpdatesConsumer.init] Consumer started.")
+    Process.send_after(self(), :poll, 1000)
+    {:ok, Map.put(state, :offset, 0)}
   end
 
   def handle_info(:poll, state) do
     case Telegex.get_updates(offset: state.offset, timeout: 10) do
       {:ok, updates} ->
-        new_state = handle_updates(updates, state)
-        Process.send_after(self(), :poll, @poll_interval_ms)
-        {:noreply, new_state}
-
-      {:error, reason} ->
-        Logger.error("[UpdatesConsumer.handle_info] Polling failed: #{inspect(reason)}")
+        Enum.each(updates, fn u -> Handler.handle_update(u, %{}) end)
+        new_offset = if List.last(updates), do: List.last(updates).update_id + 1, else: state.offset
+        Process.send_after(self(), :poll, 1000)
+        {:noreply, Map.put(state, :offset, new_offset)}
+      {:error, r} ->
+        Logger.error("[UpdatesConsumer] Poll error: #{inspect(r)}")
         Process.send_after(self(), :poll, 5000)
         {:noreply, state}
     end
-  end
-
-  defp handle_updates(updates, state) do
-    Enum.reduce(updates, state, fn update, acc ->
-      Handler.handle_update(update, %{})
-
-      new_offset = update.update_id + 1
-      Map.put(acc, :offset, max(acc.offset, new_offset))
-    end)
   end
 end

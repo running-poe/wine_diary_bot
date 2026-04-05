@@ -2,25 +2,63 @@ defmodule WineDiaryBot.Tastings.TastingNote do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias WineDiaryBot.Tastings.Tasting
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
   schema "tasting_notes" do
+    # Визуал
+    belongs_to :color, WineDiaryBot.Tastings.Level, type: :id
     field :color_custom, :string
+    belongs_to :color_intensity, WineDiaryBot.Tastings.Level, type: :id
     field :color_intensity_custom, :string
+
+    # Аромат
+    belongs_to :aroma_intensity, WineDiaryBot.Tastings.Level, type: :id
+    field :aroma_intensity_custom, :string
+
+    # Вкус
+    belongs_to :taste_intensity, WineDiaryBot.Tastings.Level, type: :id
+    field :taste_intensity_custom, :string
+
+    belongs_to :sugar, WineDiaryBot.Tastings.Level, type: :id
     field :sugar_custom, :string
+
+    belongs_to :acidity, WineDiaryBot.Tastings.Level, type: :id
     field :acidity_custom, :string
+
+    belongs_to :tannins, WineDiaryBot.Tastings.Level, type: :id
     field :tannins_custom, :string
+
+    belongs_to :alcohol, WineDiaryBot.Tastings.Level, type: :id
     field :alcohol_custom, :string
+
+    belongs_to :body, WineDiaryBot.Tastings.Level, type: :id
     field :body_custom, :string
+
+    belongs_to :finish, WineDiaryBot.Tastings.Level, type: :id
     field :finish_custom, :string
 
-    belongs_to :tasting, WineDiaryBot.Tastings.Tasting
+    belongs_to :tasting, Tasting
+
     timestamps()
   end
 
   def changeset(note, attrs) do
     note
-    |> cast(attrs, [:color_custom, :color_intensity_custom, :sugar_custom, :acidity_custom, :tannins_custom, :alcohol_custom, :body_custom, :finish_custom, :tasting_id])
+    |> cast(attrs, [
+      :tasting_id,
+      :color_id, :color_custom,
+      :color_intensity_id, :color_intensity_custom,
+      :aroma_intensity_id, :aroma_intensity_custom,
+      :taste_intensity_id, :taste_intensity_custom,
+      :sugar_id, :sugar_custom,
+      :acidity_id, :acidity_custom,
+      :tannins_id, :tannins_custom,
+      :alcohol_id, :alcohol_custom,
+      :body_id, :body_custom,
+      :finish_id, :finish_custom
+    ])
   end
 end
